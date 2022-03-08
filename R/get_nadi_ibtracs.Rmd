@@ -1,0 +1,45 @@
+---
+title: "Extract Fiji data"
+author: "Dave Eslinger"
+date: "3/8/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tidyverse")
+library("here")
+```
+
+## Read and Wrangle IBTrACS data
+
+Get the current version of IBTrACS
+
+```{r get_SP_ibtracs}
+# download_status <- download.file("https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/csv/ibtracs.ALL.list.v04r00.csv", here("data","raw_ibtracs.csv"))
+download_status <- download.file("https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/csv/ibtracs.SP.list.v04r00.csv", here("data","raw_ibtracs_SP.csv"))
+
+ibt_raw_SP <- read_csv(here("data","raw_ibtracs_SP.csv"))
+```
+
+Extract Nadi observations
+
+```{r find_nadi}
+
+nadi <- filter(ibt_raw_SP, !is.na(NADI_LAT) & TRACK_TYPE == "main") %>% 
+  select(1:17, 118:122, 162, 163) %>% 
+  mutate(SID = paste(NAME, SEASON, sep = "_"))
+
+colnames(nadi) <- tolower(colnames(nadi))
+```
+Convert Nadi observations into {sf} objects
+
+```{r convert_to_sf}
+
+nadi_sf <- nadi %>% 
+  group_by(sid) %>% 
+  
+
+```
+
+

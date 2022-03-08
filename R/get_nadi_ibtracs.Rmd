@@ -9,6 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 library("tidyverse")
 library("here")
+library("sf")
 ```
 
 ## Read and Wrangle IBTrACS data
@@ -19,27 +20,112 @@ Get the current version of IBTrACS
 # download_status <- download.file("https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/csv/ibtracs.ALL.list.v04r00.csv", here("data","raw_ibtracs.csv"))
 download_status <- download.file("https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r00/access/csv/ibtracs.SP.list.v04r00.csv", here("data","raw_ibtracs_SP.csv"))
 
-ibt_raw_SP <- read_csv(here("data","raw_ibtracs_SP.csv"))
+ibt_names <- read_csv(file = here("data","raw_ibtracs_SP.csv"), 
+                      col_names = T, n_max = 0,
+                      col_select = c(1:17, 118:122, 162, 163))
+ibt_raw_SP <- read_csv(file = here("data","raw_ibtracs_SP.csv"), 
+                       col_names = F, skip = 2,
+                      col_select = c(1:17, 118:122, 162, 163),
+                      col_types = "ccccccTcddddccdccddddddd")
+colnames(ibt_raw_SP) <- tolower(colnames(ibt_names))
 ```
 
 Extract Nadi observations
 
 ```{r find_nadi}
 
-nadi <- filter(ibt_raw_SP, !is.na(NADI_LAT) & TRACK_TYPE == "main") %>% 
-  select(1:17, 118:122, 162, 163) %>% 
-  mutate(SID = paste(NAME, SEASON, sep = "_"))
+nadi <- filter(ibt_raw_SP, !is.na(nadi_lat) & track_type == "main") %>% 
+  # select(1:17, 118:122, 162, 163) %>% 
+  mutate(sid = paste(name, season, sep = "_"),
+         lon = ifelse(lon < 0, lon + 360., lon),
+         nadi_lon = ifelse(nadi_lon < 0, nadi_lon + 360., nadi_lon))
 
-colnames(nadi) <- tolower(colnames(nadi))
+
 ```
 Convert Nadi observations into {sf} objects
 
 ```{r convert_to_sf}
 
-nadi_sf <- nadi %>% 
+nadi_pts <- st_as_sf(nadi, coords = c("nadi_lon", "nadi_lat"), crs = 4326) 
+
+nadi_tracks <- nadi_pts %>% 
   group_by(sid) %>% 
-  
+  summarize(max_wind = max(nadi_wind, na.rm = TRUE), obs = n(), do_union = FALSE) %>% 
+  st_cast("LINESTRING")
+
+```
+
+Plot the tracks
+
+
+```{r plot_tracks}
+ggplot() +
+  geom_sf(data = nadi_tracks, aes(color = max_wind))
+```
+
+```{r create_segments}
+nadi_pts <- nadi %>% 
+  group_by(sid) %>% 
+  transmute(sid, season, name, iso_time, 
+            slon = nadi_lon, 
+            slat = nadi_lat,
+            llon = c(lead(nadi_lon, n = 1)),
+            llat = c(lead(nadi_lat, n = 1)),
+            llon = ifelse(is.na(llon), slon + .0002, llon),
+            llat = ifelse(is.na(llat), slat + .0002, llat),
+            wind = nadi_wind,
+            pres = nadi_pres,
+            segid = paste(sid, 1:n(), sep = "_")) %>% 
+  ungroup()
+
+nadi_s <- st_as_sf(nadi_pts, coords = c("slon", "slat"), crs = 4326, remove = F)
+nadi_l <- st_as_sf(nadi_pts, coords = c("llon", "llat"), crs = 4326, remove = F)
+
+nadi_segs <- rbind(nadi_s, nadi_l) %>% 
+  group_by(segid) %>% 
+  summarise(sid = first(sid), 
+            season = first(season),
+            name = first(name), 
+            iso_time = first(iso_time), 
+            wind = first(wind), 
+            pres = first(pres),
+            do_union = FALSE) %>% 
+  st_cast("LINESTRING")
+
+str(nadi_segs)
+```
+
+Plot segments, colored by wind speed
+
+```{r plot_segments}
+ggplot() +
+  geom_sf(data = nadi_segs, aes(color = wind), size = 1.) +
+  scale_color_continuous(type = "viridis")
 
 ```
 
 
+```{r create_segs}
+nadi_pts2 <- nadi %>% 
+  group_by(sid) %>% 
+  transmute(slon = nadi_lon, 
+            slat = nadi_lat,
+            llon = c(lead(nadi_lon, n = 1)),
+            llat = c(lead(nadi_lat, n = 1)),
+            llon = ifelse(is.na(llon), slon + .0002, llon),
+            llat = ifelse(is.na(llat), slat + .0002, llat),
+            segid = paste(sid, 1:n(), sep = "_")) %>% 
+  ungroup()
+
+nadi_s2 <- st_as_sf(nadi_pts2, coords = c("slon", "slat"), crs = 4326) %>% 
+  select(-c(llon, llat))
+nadi_l2 <- st_as_sf(nadi_pts2, coords = c("llon", "llat"), crs = 4326) %>% 
+  select(-c(llon, llat))
+nadi_segs2 <- rbind(nadi_s, nadi_l) %>% 
+  group_by(segid) %>% 
+  summarise(sid = first(sid),
+            do_union = FALSE) %>% 
+  st_cast("LINESTRING")
+
+str(nadi_segs)
+```
